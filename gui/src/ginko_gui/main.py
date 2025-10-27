@@ -317,7 +317,16 @@ class BoardWidget(QWidget):
             rect = QRectF(left + col * square, top + row * square, square, square)
             label = KANJI_MAP.get(piece.kind, piece.kind)
             painter.setPen(Qt.black if piece.color == "b" else Qt.darkRed)
-            painter.drawText(rect, Qt.AlignCenter, label)
+            if piece.color == "w":
+                painter.save()
+                center = rect.center()
+                painter.translate(center)
+                painter.rotate(180)
+                flipped_rect = QRectF(-rect.width() / 2, -rect.height() / 2, rect.width(), rect.height())
+                painter.drawText(flipped_rect, Qt.AlignCenter, label)
+                painter.restore()
+            else:
+                painter.drawText(rect, Qt.AlignCenter, label)
 
         painter.setPen(Qt.black)
         font_small = QFont(self.font())
