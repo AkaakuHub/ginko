@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QSize, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QLinearGradient, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -315,18 +315,7 @@ class BoardWidget(QWidget):
         for coord, piece in self._state.board.items():
             row, col = coord_to_indices(coord)
             rect = QRectF(left + col * square, top + row * square, square, square)
-            label = KANJI_MAP.get(piece.kind, piece.kind)
-            painter.setPen(Qt.black if piece.color == "b" else Qt.darkRed)
-            if piece.color == "w":
-                painter.save()
-                center = rect.center()
-                painter.translate(center)
-                painter.rotate(180)
-                flipped_rect = QRectF(-rect.width() / 2, -rect.height() / 2, rect.width(), rect.height())
-                painter.drawText(flipped_rect, Qt.AlignCenter, label)
-                painter.restore()
-            else:
-                painter.drawText(rect, Qt.AlignCenter, label)
+            self._draw_piece(painter, rect, piece)
 
         painter.setPen(Qt.black)
         font_small = QFont(self.font())
@@ -341,6 +330,59 @@ class BoardWidget(QWidget):
             text = rank_value
             y = top + (idx + 0.6) * square
             painter.drawText(QPointF(left - square * 0.2, y), text)
+
+    def _draw_piece(self, painter: QPainter, rect: QRectF, piece: Piece) -> None:
+        painter.save()
+        if piece.color == "w":
+            center = rect.center()
+            painter.translate(center)
+            painter.rotate(180)
+            painter.translate(-center)
+
+        path = QPainterPath()
+        width = rect.width()
+        height = rect.height()
+        top_margin = height * 0.08
+        shoulder_offset = width * 0.18
+        shoulder_height = height * 0.32
+        flank_offset = width * 0.08
+        bottom_margin = height * 0.06
+
+        top_point = QPointF(rect.center().x(), rect.top() + top_margin)
+        upper_left = QPointF(rect.left() + shoulder_offset, rect.top() + shoulder_height)
+        lower_left = QPointF(rect.left() + flank_offset, rect.bottom() - bottom_margin)
+        lower_right = QPointF(rect.right() - flank_offset, rect.bottom() - bottom_margin)
+        upper_right = QPointF(rect.right() - shoulder_offset, rect.top() + shoulder_height)
+
+        path.moveTo(top_point)
+        path.lineTo(upper_right)
+        path.lineTo(lower_right)
+        path.lineTo(lower_left)
+        path.lineTo(upper_left)
+        path.closeSubpath()
+
+        gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        gradient.setColorAt(0.0, QColor(250, 236, 210))
+        gradient.setColorAt(0.45, QColor(234, 205, 150))
+        gradient.setColorAt(1.0, QColor(198, 160, 110))
+
+        outline_color = QColor(120, 90, 50)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(QBrush(gradient))
+        painter.setPen(QPen(outline_color, max(1.0, width * 0.035)))
+        painter.drawPath(path)
+
+        inner_rect = rect.adjusted(width * 0.08, height * 0.05, -width * 0.08, -height * 0.05)
+        label = KANJI_MAP.get(piece.kind, piece.kind)
+        text_color = Qt.black if piece.color == "b" else QColor(120, 40, 40)
+        text_font = QFont(self.font())
+        text_font.setPointSizeF(height * 0.44)
+        text_font.setBold(True)
+        painter.setFont(text_font)
+        painter.setPen(text_color)
+        painter.drawText(inner_rect, Qt.AlignCenter, label)
+
+        painter.restore()
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() != Qt.LeftButton:
