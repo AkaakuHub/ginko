@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="source">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="source\extra">
+      <UniqueIdentifier>{217a7498-b1cd-4b5d-8257-c51167343614}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source\docs">
+      <UniqueIdentifier>{2f61fd92-eebb-4969-8dd2-a20ac4afa792}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="search.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="types.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="usi.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="misc.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="position.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="movegen.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="evaluate.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="extra\rp_cmd.cpp">
+      <Filter>source\extra</Filter>
+    </ClCompile>
+    <ClCompile Include="bitboard.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="extra\user_test.cpp">
+      <Filter>source\extra</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="config.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="types.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="extra\bitop.h">
+      <Filter>source\extra</Filter>
+    </ClInclude>
+    <ClInclude Include="extra\macros.h">
+      <Filter>source\extra</Filter>
+    </ClInclude>
+    <ClInclude Include="usi.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="position.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="misc.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="search.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="evaluate.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="bitboard.h">
+      <Filter>source</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile">
+      <Filter>source\docs</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="..\docs\USI拡張コマンド.txt">
+      <Filter>source\docs</Filter>
+    </Text>
+    <Text Include="..\docs\解説.txt">
+      <Filter>source\docs</Filter>
+    </Text>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ginko-gui"
+version = "0.1.0"
+description = "USI-compatible 5x5 shogi GUI with audio feedback"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = {text = "MIT"}
+authors = [{name = "AkaakuHub"}]
+dependencies = [
+  "PySide6>=6.7,<7",
+  "pygame>=2.6,<3",
+  "anyio>=4.6,<5"
+]
+
+[project.scripts]
+ginko-gui = "ginko_gui.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.6,<0.7"
+]
+
+[tool.uv]
+default-groups = ["dev"]

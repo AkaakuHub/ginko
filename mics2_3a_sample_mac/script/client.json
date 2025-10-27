@@ -1,0 +1,6 @@
+{
+    "command": "./minishogi-by-gcc",
+    "cwd": "../source",
+    "option": {
+    }
+}

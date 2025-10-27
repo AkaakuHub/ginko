@@ -1,0 +1,24 @@
+# Rust
+engine/target/
+engine/.cargo/
+
+# Python/uv
+*.py[cod]
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+gui/.venv/
+gui/.ruff_cache/
+gui/.pytest_cache/
+gui/.mypy_cache/
+
+# Docs (excluded per requirement)
+cc-docs/
+
+# Tooling
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
