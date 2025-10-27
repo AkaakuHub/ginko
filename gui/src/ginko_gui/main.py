@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QSize, Signal, Slot
+from PySide6.QtCore import QPointF, QRectF, Qt, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -161,6 +161,16 @@ class BoardState:
 
     def hand_counts(self, color: str) -> Counter[str]:
         return self.hands[color]
+
+    def repetition_key(self) -> tuple:
+        board_items = tuple(
+            sorted((coord, piece.color, piece.kind) for coord, piece in self.board.items())
+        )
+        hand_items = (
+            tuple(sorted(self.hands["b"].items())),
+            tuple(sorted(self.hands["w"].items())),
+        )
+        return board_items, hand_items, self.side_to_move
 
     @staticmethod
     def _base_kind(kind: str) -> str:
@@ -399,12 +409,15 @@ class MainWindow(QMainWindow):
         self.waiting_legal_moves = False
         self.in_check = False
         self.game_over = False
+        self.position_counts: Counter = Counter()
+        self.position_history: list[tuple] = []
 
         self.engine_client = EngineClient(EngineConfig(executable=self._default_engine_path()))
         self.engine_client.line_received.connect(self._handle_engine_line)
         self.engine_client.error_occurred.connect(self._handle_engine_error)
         self.engine_client.process_exited.connect(self._handle_engine_exit)
 
+        self._reset_position_history()
         self._build_ui()
         self._configure_audio_assets()
         self._start_engine()
@@ -434,6 +447,11 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(QLabel("先手持ち駒"))
         left_panel.addWidget(self.sente_hand)
 
+        self.cancel_drop_button = QPushButton("持ち駒選択をキャンセル")
+        self.cancel_drop_button.setEnabled(False)
+        self.cancel_drop_button.clicked.connect(self._handle_cancel_drop)
+        left_panel.addWidget(self.cancel_drop_button)
+
         root.addLayout(left_panel, stretch=3)
 
         right_panel = QVBoxLayout()
@@ -455,7 +473,16 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.info_view = QTextEdit()
         self.info_view.setReadOnly(True)
-        right_panel.addWidget(QLabel("ログ"))
+        log_header = QHBoxLayout()
+        log_header.setContentsMargins(0, 0, 0, 0)
+        log_header.setSpacing(6)
+        log_label = QLabel("ログ")
+        self.clear_log_button = QPushButton("ログをクリア")
+        self.clear_log_button.clicked.connect(self._handle_clear_log)
+        log_header.addWidget(log_label)
+        log_header.addStretch(1)
+        log_header.addWidget(self.clear_log_button)
+        right_panel.addLayout(log_header)
         right_panel.addWidget(self.log_view, stretch=1)
         right_panel.addWidget(QLabel("思考情報"))
         right_panel.addWidget(self.info_view, stretch=1)
@@ -504,13 +531,14 @@ class MainWindow(QMainWindow):
         self.board_state.reset()
         self.move_history.clear()
         self.selected_square = None
-        self.selected_drop_kind = None
+        self._clear_drop_selection()
         self.awaiting_engine_move = False
         self.pending_user_move = None
         self.legal_moves.clear()
         self.waiting_legal_moves = False
         self.in_check = False
         self.game_over = False
+        self._reset_position_history()
         self.board_widget.setEnabled(True)
         self.sente_hand.setEnabled(True)
         self.resign_button.setEnabled(True)
@@ -538,6 +566,7 @@ class MainWindow(QMainWindow):
         self.board_widget.set_selection(None, drop_mode=True)
         self.statusBar().showMessage(f"{KANJI_MAP[kind]} を打つ場所を選択")
         self._update_highlight_targets()
+        self.cancel_drop_button.setEnabled(True)
 
     def _handle_board_click(self, coord: str) -> None:
         if self.awaiting_engine_move or self.game_over:
@@ -551,9 +580,7 @@ class MainWindow(QMainWindow):
             move = f"{self.selected_drop_kind}*{coord}"
             if not self._apply_human_move(move):
                 return
-            self.selected_drop_kind = None
-            self.board_widget.set_selection(None, drop_mode=False)
-            self._update_highlight_targets()
+            self._clear_drop_selection()
             return
 
         if self.selected_square is None:
@@ -578,6 +605,21 @@ class MainWindow(QMainWindow):
         self.board_widget.set_selection(None, drop_mode=False)
         self._update_highlight_targets()
         self._apply_human_move(move)
+
+    def _handle_cancel_drop(self) -> None:
+        if not self.selected_drop_kind:
+            return
+        self._clear_drop_selection()
+        self.statusBar().showMessage("持ち駒の選択を解除しました")
+
+    def _clear_drop_selection(self) -> None:
+        had_drop = self.selected_drop_kind is not None
+        self.selected_drop_kind = None
+        if hasattr(self, "cancel_drop_button"):
+            self.cancel_drop_button.setEnabled(False)
+        if had_drop:
+            self.board_widget.set_selection(None, drop_mode=False)
+        self._update_highlight_targets()
 
     def _build_move_string(self, from_sq: str, to_sq: str) -> Optional[str]:
         piece = self.board_state.piece_at(from_sq)
@@ -640,6 +682,9 @@ class MainWindow(QMainWindow):
         self.audio_manager.play_move_sound()
         self._append_log(f"先手: {move}")
         self._refresh_views()
+        self._record_position()
+        if self.game_over:
+            return True
 
         self._sync_engine_position()
         self.engine_client.send_line("go depth 3")
@@ -654,6 +699,10 @@ class MainWindow(QMainWindow):
         turn_text = "先手番" if self.board_state.side_to_move == self.HUMAN_COLOR else "後手番"
         if not self.awaiting_engine_move:
             self.statusBar().showMessage(f"{turn_text}です")
+
+    def _handle_clear_log(self) -> None:
+        self.log_view.clear()
+        self.statusBar().showMessage("ログをクリアしました")
 
     def _handle_engine_line(self, line: str) -> None:
         if line.startswith("id"):
@@ -677,6 +726,12 @@ class MainWindow(QMainWindow):
             if self.pending_user_move and self.move_history and self.move_history[-1] == self.pending_user_move:
                 self.move_history.pop()
                 self.board_state.load_history(self.move_history)
+                self._rebuild_position_history()
+                self.game_over = False
+                self.board_widget.setEnabled(True)
+                self.sente_hand.setEnabled(True)
+                self.resign_button.setEnabled(True)
+                self._clear_drop_selection()
                 self.awaiting_engine_move = False
                 self.pending_user_move = None
                 self._sync_engine_position()
@@ -723,6 +778,9 @@ class MainWindow(QMainWindow):
         self._append_log(f"後手: {move}")
         self.audio_manager.play_move_sound()
         self._refresh_views()
+        self._record_position()
+        if self.game_over:
+            return
         self._request_legal_moves()
         self._check_game_over_conditions()
 
@@ -780,6 +838,38 @@ class MainWindow(QMainWindow):
         self.engine_client.send_line("legalmoves")
         self.waiting_legal_moves = True
 
+    def _reset_position_history(self) -> None:
+        self.position_counts.clear()
+        self.position_history.clear()
+        key = self.board_state.repetition_key()
+        self.position_counts[key] = 1
+        self.position_history.append(key)
+
+    def _record_position(self) -> None:
+        if self.game_over:
+            return
+        key = self.board_state.repetition_key()
+        self.position_history.append(key)
+        self.position_counts[key] += 1
+        if self.position_counts[key] >= 4:
+            self._handle_repetition()
+
+    def _rebuild_position_history(self) -> None:
+        temp_state = BoardState()
+        self.position_counts.clear()
+        self.position_history.clear()
+        key = temp_state.repetition_key()
+        self.position_counts[key] = 1
+        self.position_history.append(key)
+        for move in self.move_history:
+            try:
+                temp_state.apply_move(move)
+            except ValueError:
+                break
+            key = temp_state.repetition_key()
+            self.position_history.append(key)
+            self.position_counts[key] += 1
+
     def _check_game_over_conditions(self) -> None:
         if self.game_over:
             return
@@ -794,20 +884,44 @@ class MainWindow(QMainWindow):
         self._handle_checkmate()
 
     def _handle_checkmate(self) -> None:
+        self._finalize_game(
+            "詰まされました",
+            "詰み: あなたの負けです。",
+            "詰み",
+            "あなたの負けです。",
+        )
+
+    def _handle_repetition(self) -> None:
+        self._finalize_game(
+            "千日手です",
+            "千日手: 引き分けです。",
+            "千日手",
+            "千日手です。引き分けとなります。",
+        )
+
+    def _finalize_game(
+        self,
+        status_message: str,
+        log_message: str,
+        dialog_title: str,
+        dialog_message: str,
+    ) -> None:
+        if self.game_over:
+            return
         self.game_over = True
         self.awaiting_engine_move = False
         self.pending_user_move = None
         self.selected_square = None
-        self.selected_drop_kind = None
+        self._clear_drop_selection()
         self.waiting_legal_moves = False
         self.board_widget.setEnabled(False)
         self.sente_hand.setEnabled(False)
         self.resign_button.setEnabled(False)
         self.board_widget.set_selection(None, drop_mode=False)
         self.board_widget.set_highlight_targets([])
-        self.statusBar().showMessage("詰まされました")
-        self._append_log("詰み: あなたの負けです。")
-        QMessageBox.information(self, "詰み", "あなたの負けです。")
+        self.statusBar().showMessage(status_message)
+        self._append_log(log_message)
+        QMessageBox.information(self, dialog_title, dialog_message)
 
     def _update_check_indicator(self) -> None:
         if not hasattr(self, "check_indicator"):
