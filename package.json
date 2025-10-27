@@ -1,0 +1,16 @@
+{
+  "name": "ginko",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently 'cd engine && cargo run' 'cd gui && uv run ginko-gui'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.11.0",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
