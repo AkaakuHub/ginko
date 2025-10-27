@@ -386,6 +386,8 @@ class MainWindow(QMainWindow):
     def __init__(self, audio_manager: AudioManager) -> None:
         super().__init__()
         self.audio_manager = audio_manager
+        self.audio_assets_dir = self._default_audio_dir()
+        self.audio_assets_dir.mkdir(parents=True, exist_ok=True)
         self.board_state = BoardState()
         self.move_history: list[str] = []
         self.selected_square: Optional[str] = None
@@ -403,6 +405,7 @@ class MainWindow(QMainWindow):
         self.engine_client.process_exited.connect(self._handle_engine_exit)
 
         self._build_ui()
+        self._configure_audio_assets()
         self._start_engine()
 
     def _build_ui(self) -> None:
@@ -471,6 +474,15 @@ class MainWindow(QMainWindow):
         release_path = project_root / "engine" / "target" / "release" / "engine"
         return release_path
 
+    def _default_audio_dir(self) -> Path:
+        project_root = Path(__file__).resolve().parents[3]
+        return project_root / "gui" / "assets" / "audio"
+
+    def _configure_audio_assets(self) -> None:
+        greeting = self.audio_assets_dir / "greeting.mp3"
+        if greeting.exists():
+            self.audio_manager.set_voice_sound("game_start", greeting)
+
     def _start_engine(self) -> None:
         try:
             self.engine_client.start()
@@ -505,6 +517,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("先手番です")
             self._request_legal_moves()
         self.info_view.clear()
+        self.audio_manager.play_voice("game_start")
 
     def _handle_resign(self) -> None:
         QMessageBox.information(self, "投了", "先手が投了しました。")
@@ -650,6 +663,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("先手番です")
             self.info_view.clear()
             self._request_legal_moves()
+            self.audio_manager.play_voice("game_start")
             return
         if line.startswith("info string position error"):
             self._append_info(line)
