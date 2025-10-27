@@ -398,6 +398,7 @@ class MainWindow(QMainWindow):
         self.legal_moves: list[str] = []
         self.waiting_legal_moves = False
         self.in_check = False
+        self.game_over = False
 
         self.engine_client = EngineClient(EngineConfig(executable=self._default_engine_path()))
         self.engine_client.line_received.connect(self._handle_engine_line)
@@ -509,6 +510,10 @@ class MainWindow(QMainWindow):
         self.legal_moves.clear()
         self.waiting_legal_moves = False
         self.in_check = False
+        self.game_over = False
+        self.board_widget.setEnabled(True)
+        self.sente_hand.setEnabled(True)
+        self.resign_button.setEnabled(True)
         self._refresh_views()
         self._update_check_indicator()
         if self.usi_ready:
@@ -526,7 +531,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("対局終了")
 
     def _handle_drop_selection(self, kind: str) -> None:
-        if self.awaiting_engine_move:
+        if self.awaiting_engine_move or self.game_over:
             return
         self.selected_drop_kind = kind
         self.selected_square = None
@@ -535,7 +540,7 @@ class MainWindow(QMainWindow):
         self._update_highlight_targets()
 
     def _handle_board_click(self, coord: str) -> None:
-        if self.awaiting_engine_move:
+        if self.awaiting_engine_move or self.game_over:
             return
 
         piece = self.board_state.piece_at(coord)
@@ -719,6 +724,7 @@ class MainWindow(QMainWindow):
         self.audio_manager.play_move_sound()
         self._refresh_views()
         self._request_legal_moves()
+        self._check_game_over_conditions()
 
     def _handle_engine_error(self, text: str) -> None:
         self._append_log(f"[ERR] {text}")
@@ -754,18 +760,54 @@ class MainWindow(QMainWindow):
         self.legal_moves = moves
         self.waiting_legal_moves = False
         self._update_highlight_targets()
+        self._check_game_over_conditions()
 
     def _handle_checkstate(self, line: str) -> None:
         parts = line.split(maxsplit=1)
         value = parts[1].strip().lower() if len(parts) > 1 else ""
         self.in_check = value in {"1", "true", "yes"}
         self._update_check_indicator()
+        self._check_game_over_conditions()
 
     def _request_legal_moves(self) -> None:
-        if not self.usi_ready or self.awaiting_engine_move or self.waiting_legal_moves:
+        if (
+            not self.usi_ready
+            or self.awaiting_engine_move
+            or self.waiting_legal_moves
+            or self.game_over
+        ):
             return
         self.engine_client.send_line("legalmoves")
         self.waiting_legal_moves = True
+
+    def _check_game_over_conditions(self) -> None:
+        if self.game_over:
+            return
+        if self.board_state.side_to_move != self.HUMAN_COLOR:
+            return
+        if self.waiting_legal_moves:
+            return
+        if not self.in_check:
+            return
+        if self.legal_moves:
+            return
+        self._handle_checkmate()
+
+    def _handle_checkmate(self) -> None:
+        self.game_over = True
+        self.awaiting_engine_move = False
+        self.pending_user_move = None
+        self.selected_square = None
+        self.selected_drop_kind = None
+        self.waiting_legal_moves = False
+        self.board_widget.setEnabled(False)
+        self.sente_hand.setEnabled(False)
+        self.resign_button.setEnabled(False)
+        self.board_widget.set_selection(None, drop_mode=False)
+        self.board_widget.set_highlight_targets([])
+        self.statusBar().showMessage("詰まされました")
+        self._append_log("詰み: あなたの負けです。")
+        QMessageBox.information(self, "詰み", "あなたの負けです。")
 
     def _update_check_indicator(self) -> None:
         if not hasattr(self, "check_indicator"):
