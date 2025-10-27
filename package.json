@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "concurrently 'cd engine && cargo run' 'cd gui && uv run ginko-gui'"
+    "dev": "concurrently -k --success exitFirst \"cd engine && cargo run\" \"cd gui && uv run ginko-gui\""
   },
   "keywords": [],
   "author": "",
