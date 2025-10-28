@@ -1,6 +1,6 @@
-use crate::board::all_squares;
+use crate::board::{all_squares, Square, BOARD_FILES, BOARD_RANKS};
 use crate::hand::{Hand, HandPieceKind};
-use crate::piece::{Color, PieceKind};
+use crate::piece::{Color, Piece, PieceKind};
 use crate::position::Position;
 
 const PIECE_VALUES: [i32; 10] = [
@@ -18,6 +18,10 @@ const PIECE_VALUES: [i32; 10] = [
 
 fn piece_value(kind: PieceKind) -> i32 {
     PIECE_VALUES[kind as usize]
+}
+
+pub fn piece_material_value(kind: PieceKind) -> i32 {
+    piece_value(kind)
 }
 
 fn hand_piece_value(kind: HandPieceKind) -> i32 {
@@ -46,11 +50,40 @@ fn score_hand(color: Color, hand: &Hand) -> i32 {
     score
 }
 
+fn positional_bonus(piece: Piece, square: Square) -> i32 {
+    let file = square.file() as i32;
+    let rank = square.rank() as i32;
+    let center_file = (BOARD_FILES as i32 - 1) / 2;
+    let center_rank = (BOARD_RANKS as i32 - 1) / 2;
+    let center_distance = (file - center_file).abs() + (rank - center_rank).abs();
+    let center_bonus = (4 - center_distance).max(0) * 10;
+
+    let advancement = match piece.color {
+        Color::Black => BOARD_RANKS as i32 - 1 - rank,
+        Color::White => rank,
+    };
+
+    match piece.kind {
+        PieceKind::Pawn => advancement * 25 + center_bonus * 2,
+        PieceKind::Tokin => advancement * 20 + center_bonus * 3 + 50,
+        PieceKind::Silver => advancement * 15 + center_bonus * 3,
+        PieceKind::PromotedSilver => advancement * 20 + center_bonus * 3 + 40,
+        PieceKind::Bishop => center_bonus * 5,
+        PieceKind::PromotedBishop => center_bonus * 6 + 40,
+        PieceKind::Rook => advancement * 10 + center_bonus * 6,
+        PieceKind::PromotedRook => advancement * 12 + center_bonus * 6 + 60,
+        PieceKind::Gold => advancement * 12 + center_bonus * 3,
+        PieceKind::King => (4 - (rank - center_rank).abs()) * 20 - advancement * 10,
+    }
+}
+
 fn score_board(position: &Position) -> i32 {
     let mut score = 0;
     for square in all_squares() {
         if let Some(piece) = position.piece_at(square) {
-            let value = piece_value(piece.kind) as i32;
+            let material = piece_value(piece.kind);
+            let positional = positional_bonus(piece, square);
+            let value = material + positional;
             score += match piece.color {
                 Color::Black => value,
                 Color::White => -value,

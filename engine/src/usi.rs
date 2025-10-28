@@ -67,6 +67,7 @@ impl UsiEngine {
 
     fn parse_go_limits(&self, args: &[&str]) -> SearchLimits {
         let mut depth = None;
+        let mut randomness = None;
         let mut iter = args.iter();
         while let Some(&token) = iter.next() {
             if token.eq_ignore_ascii_case("depth") {
@@ -75,10 +76,17 @@ impl UsiEngine {
                         depth = Some(parsed.max(1));
                     }
                 }
+            } else if token.eq_ignore_ascii_case("random") {
+                if let Some(&value) = iter.next() {
+                    if let Ok(parsed) = value.parse::<i32>() {
+                        randomness = Some(parsed.max(0));
+                    }
+                }
             }
         }
         SearchLimits {
             depth: depth.unwrap_or(self.default_limits.depth),
+            randomness: randomness.unwrap_or(self.default_limits.randomness),
         }
     }
 

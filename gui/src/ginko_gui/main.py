@@ -465,6 +465,7 @@ class MainWindow(QMainWindow):
         self.position_history: list[tuple] = []
         self.ai_vs_ai_mode = False
         self.engine_depth = 3
+        self.engine_randomness = 200
         self.ai_turn_delay_ms = 1000
         self._pending_ai_start: Optional[str] = None
 
@@ -495,6 +496,12 @@ class MainWindow(QMainWindow):
         seconds = self.ai_turn_delay_ms / 1000
         return f"AIターン間隔: {seconds:.1f}秒"
 
+    def _format_randomness_text(self) -> str:
+        return f"AIランダム性: ±{self.engine_randomness}点"
+
+    def _format_depth_text(self) -> str:
+        return f"探索深さ: {self.engine_depth}手先"
+
     def _update_ai_delay_display(self) -> None:
         if hasattr(self, "ai_delay_label"):
             self.ai_delay_label.setText(self._format_ai_delay_text())
@@ -504,6 +511,16 @@ class MainWindow(QMainWindow):
     def _handle_ai_delay_changed(self, value: int) -> None:
         self.ai_turn_delay_ms = max(0, int(value))
         self._update_ai_delay_display()
+
+    def _handle_depth_changed(self, value: int) -> None:
+        self.engine_depth = max(1, int(value))
+        if hasattr(self, "depth_label"):
+            self.depth_label.setText(self._format_depth_text())
+
+    def _handle_randomness_changed(self, value: int) -> None:
+        self.engine_randomness = max(0, int(value))
+        if hasattr(self, "randomness_label"):
+            self.randomness_label.setText(self._format_randomness_text())
 
     def _update_player_controls(self) -> None:
         human_turn_available = not self._is_engine_controlled(self.HUMAN_COLOR) and not self.game_over
@@ -579,7 +596,9 @@ class MainWindow(QMainWindow):
         self.pending_user_move = None
         self._update_player_controls()
         self._sync_engine_position()
-        self.engine_client.send_line(f"go depth {self.engine_depth}")
+        self.engine_client.send_line(
+            f"go depth {self.engine_depth} random {self.engine_randomness}"
+        )
         actor = self._format_actor_label(side)
         self.statusBar().showMessage(f"{actor}の思考中…")
 
@@ -628,6 +647,30 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(self.new_game_button)
         right_panel.addWidget(self.ai_mode_button)
         right_panel.addWidget(self.resign_button)
+
+        self.depth_label = QLabel(self._format_depth_text())
+        self.depth_label.setAlignment(Qt.AlignLeft)
+        self.depth_slider = QSlider(Qt.Horizontal)
+        self.depth_slider.setRange(1, 8)
+        self.depth_slider.setSingleStep(1)
+        self.depth_slider.setPageStep(1)
+        self.depth_slider.valueChanged.connect(self._handle_depth_changed)
+        self.depth_slider.setValue(self.engine_depth)
+        right_panel.addWidget(self.depth_label)
+        right_panel.addWidget(self.depth_slider)
+
+        self.randomness_label = QLabel(self._format_randomness_text())
+        self.randomness_label.setAlignment(Qt.AlignLeft)
+        self.randomness_slider = QSlider(Qt.Horizontal)
+        self.randomness_slider.setRange(0, 2000)
+        self.randomness_slider.setSingleStep(50)
+        self.randomness_slider.setPageStep(100)
+        self.randomness_slider.setTickInterval(200)
+        self.randomness_slider.setTickPosition(QSlider.TicksBelow)
+        self.randomness_slider.valueChanged.connect(self._handle_randomness_changed)
+        self.randomness_slider.setValue(self.engine_randomness)
+        right_panel.addWidget(self.randomness_label)
+        right_panel.addWidget(self.randomness_slider)
 
         self.ai_delay_label = QLabel(self._format_ai_delay_text())
         self.ai_delay_label.setAlignment(Qt.AlignLeft)
@@ -897,7 +940,9 @@ class MainWindow(QMainWindow):
             return True
 
         self._sync_engine_position()
-        self.engine_client.send_line(f"go depth {self.engine_depth}")
+        self.engine_client.send_line(
+            f"go depth {self.engine_depth} random {self.engine_randomness}"
+        )
         self.statusBar().showMessage(f"{self._format_actor_label(self.ENGINE_COLOR)}の思考中…")
         return True
 
