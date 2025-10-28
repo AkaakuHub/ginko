@@ -1,5 +1,6 @@
 use crate::evaluation;
 use crate::moves::{Move, MoveList};
+use crate::piece::Color;
 use crate::position::{Position, PositionError};
 use crate::table::{self, Bound, TableEntry, TranspositionTable};
 
@@ -90,7 +91,20 @@ impl Searcher {
         let beta = MATE_VALUE;
 
         for mv in moves {
+            let mover = position.side_to_move();
             let next = position.play_move(&mv)?;
+            if let Some(score) =
+                repetition_terminal_value(mover, next.current_repetition_count(), 1)
+            {
+                if score > best_score {
+                    best_score = score;
+                    best_move = Some(mv);
+                }
+                if score > alpha {
+                    alpha = score;
+                }
+                continue;
+            }
             let score = -self.negamax(&next, depth - 1, -beta, -alpha, 1)?;
             if score > best_score {
                 best_score = score;
@@ -146,7 +160,23 @@ impl Searcher {
         let mut best_move = None;
 
         for mv in moves {
+            let mover = position.side_to_move();
             let next = position.play_move(&mv)?;
+            if let Some(term) =
+                repetition_terminal_value(mover, next.current_repetition_count(), ply + 1)
+            {
+                if term > best_value {
+                    best_value = term;
+                    best_move = Some(mv);
+                }
+                if term > alpha {
+                    alpha = term;
+                }
+                if alpha >= beta {
+                    break;
+                }
+                continue;
+            }
             let score = -self.negamax(&next, depth - 1, -beta, -alpha, ply + 1)?;
             if score > best_value {
                 best_value = score;
@@ -226,4 +256,37 @@ fn terminal_score(position: &Position, ply: usize) -> Result<i32, PositionError>
     } else {
         Ok(0)
     }
+}
+
+fn repetition_terminal_value(
+    mover: Color,
+    repeat_count: usize,
+    ply_from_root: usize,
+) -> Option<i32> {
+    if repeat_count >= 4 {
+        let mate_score = (MATE_VALUE - ply_from_root as i32).max(1);
+        let value = match mover {
+            Color::Black => -mate_score,
+            Color::White => mate_score,
+        };
+        return Some(value);
+    }
+
+    if repeat_count == 3 {
+        let penalty = (MATE_VALUE / 4).max(1);
+        return Some(match mover {
+            Color::Black => -penalty,
+            Color::White => penalty,
+        });
+    }
+
+    if repeat_count == 2 {
+        const SOFT_PENALTY: i32 = 500;
+        return Some(match mover {
+            Color::Black => -SOFT_PENALTY,
+            Color::White => SOFT_PENALTY,
+        });
+    }
+
+    None
 }

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QSize, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QSize, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QLinearGradient, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -462,6 +463,10 @@ class MainWindow(QMainWindow):
         self.game_over = False
         self.position_counts: Counter = Counter()
         self.position_history: list[tuple] = []
+        self.ai_vs_ai_mode = False
+        self.engine_depth = 3
+        self.ai_turn_delay_ms = 1000
+        self._pending_ai_start: Optional[str] = None
 
         self.engine_client = EngineClient(EngineConfig(executable=self._default_engine_path()))
         self.engine_client.line_received.connect(self._handle_engine_line)
@@ -472,6 +477,111 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._configure_audio_assets()
         self._start_engine()
+
+    def _is_engine_controlled(self, color: str) -> bool:
+        if color == self.ENGINE_COLOR:
+            return True
+        return self.ai_vs_ai_mode
+
+    def _format_actor_label(self, color: str) -> str:
+        base = "先手" if color == self.HUMAN_COLOR else "後手"
+        if self._is_engine_controlled(color):
+            return f"{base}AI"
+        if color == self.HUMAN_COLOR:
+            return f"{base}（あなた）"
+        return base
+
+    def _format_ai_delay_text(self) -> str:
+        seconds = self.ai_turn_delay_ms / 1000
+        return f"AIターン間隔: {seconds:.1f}秒"
+
+    def _update_ai_delay_display(self) -> None:
+        if hasattr(self, "ai_delay_label"):
+            self.ai_delay_label.setText(self._format_ai_delay_text())
+        if hasattr(self, "ai_delay_slider"):
+            self.ai_delay_slider.setEnabled(self.ai_vs_ai_mode)
+
+    def _handle_ai_delay_changed(self, value: int) -> None:
+        self.ai_turn_delay_ms = max(0, int(value))
+        self._update_ai_delay_display()
+
+    def _update_player_controls(self) -> None:
+        human_turn_available = not self._is_engine_controlled(self.HUMAN_COLOR) and not self.game_over
+        can_interact = human_turn_available and not self.awaiting_engine_move
+        self.board_widget.setEnabled(can_interact)
+        self.sente_hand.setEnabled(can_interact)
+        self.cancel_drop_button.setEnabled(can_interact and self.selected_drop_kind is not None)
+        self.resign_button.setEnabled(not self.ai_vs_ai_mode and not self.game_over)
+        self._update_ai_delay_display()
+
+    def _maybe_start_engine_turn(self) -> None:
+        if (
+            not self.usi_ready
+            or self.game_over
+            or self.awaiting_engine_move
+            or self.waiting_legal_moves
+        ):
+            return
+
+        side = self.board_state.side_to_move
+        if not self._is_engine_controlled(side):
+            self._update_player_controls()
+            return
+
+        if not self.legal_moves:
+            # legalmovesレスポンスが空なら終局判定を試みる
+            self._check_game_over_conditions()
+            return
+
+        if self._pending_ai_start is not None:
+            return
+
+        delay = self.ai_turn_delay_ms if self.ai_vs_ai_mode else 0
+        if delay > 0:
+            self._pending_ai_start = side
+            seconds = delay / 1000
+            actor = self._format_actor_label(side)
+            self.statusBar().showMessage(f"{actor}の思考開始を{seconds:.1f}秒待機…")
+            QTimer.singleShot(delay, lambda: self._handle_ai_delay_expired(side))
+            return
+
+        self._begin_engine_search(side)
+
+    def _handle_ai_delay_expired(self, side: str) -> None:
+        if self._pending_ai_start != side:
+            return
+        self._pending_ai_start = None
+        self._begin_engine_search(side)
+
+    def _begin_engine_search(self, side: str) -> None:
+        if self._pending_ai_start is not None and self._pending_ai_start != side:
+            return
+        self._pending_ai_start = None
+        if (
+            not self.usi_ready
+            or self.game_over
+            or self.waiting_legal_moves
+        ):
+            return
+        if self.board_state.side_to_move != side:
+            return
+        if not self._is_engine_controlled(side):
+            self._update_player_controls()
+            return
+        if not self.legal_moves:
+            self._check_game_over_conditions()
+            return
+
+        self._clear_drop_selection()
+        self.selected_square = None
+        self.board_widget.set_selection(None, drop_mode=False)
+        self.awaiting_engine_move = True
+        self.pending_user_move = None
+        self._update_player_controls()
+        self._sync_engine_position()
+        self.engine_client.send_line(f"go depth {self.engine_depth}")
+        actor = self._format_actor_label(side)
+        self.statusBar().showMessage(f"{actor}の思考中…")
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Ginko 5x5 Shogi")
@@ -510,11 +620,28 @@ class MainWindow(QMainWindow):
 
         self.new_game_button = QPushButton("新規対局")
         self.new_game_button.clicked.connect(self._handle_new_game)
+        self.ai_mode_button = QPushButton("AI同士対局モード: OFF")
+        self.ai_mode_button.clicked.connect(self._handle_toggle_ai_mode)
         self.resign_button = QPushButton("投了")
         self.resign_button.clicked.connect(self._handle_resign)
 
         right_panel.addWidget(self.new_game_button)
+        right_panel.addWidget(self.ai_mode_button)
         right_panel.addWidget(self.resign_button)
+
+        self.ai_delay_label = QLabel(self._format_ai_delay_text())
+        self.ai_delay_label.setAlignment(Qt.AlignLeft)
+        self.ai_delay_slider = QSlider(Qt.Horizontal)
+        self.ai_delay_slider.setRange(0, 5000)
+        self.ai_delay_slider.setSingleStep(100)
+        self.ai_delay_slider.setPageStep(500)
+        self.ai_delay_slider.setTickInterval(500)
+        self.ai_delay_slider.setTickPosition(QSlider.TicksBelow)
+        self.ai_delay_slider.valueChanged.connect(self._handle_ai_delay_changed)
+        self.ai_delay_slider.setValue(self.ai_turn_delay_ms)
+        right_panel.addWidget(self.ai_delay_label)
+        right_panel.addWidget(self.ai_delay_slider)
+
         self.check_indicator = QLabel()
         self.check_indicator.setAlignment(Qt.AlignCenter)
         self.check_indicator.setStyleSheet("font-weight: bold;")
@@ -544,6 +671,7 @@ class MainWindow(QMainWindow):
 
         self._update_check_indicator()
         self._refresh_views()
+        self._update_player_controls()
 
     def _default_engine_path(self) -> Path:
         project_root = Path(__file__).resolve().parents[3]
@@ -578,6 +706,31 @@ class MainWindow(QMainWindow):
         self.engine_client.stop()
         super().closeEvent(event)
 
+    def _handle_toggle_ai_mode(self) -> None:
+        enable = not self.ai_vs_ai_mode
+        if enable and self.move_history and not self.game_over:
+            reply = QMessageBox.question(
+                self,
+                "AI同士対局モード",
+                "進行中の対局を終了してAI同士の自動対局を開始しますか？",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self.ai_vs_ai_mode = enable
+        self.ai_mode_button.setText("AI同士対局モード: ON" if enable else "AI同士対局モード: OFF")
+        self._append_info(f"info string ai_vs_ai_mode={'on' if enable else 'off'}")
+        self._pending_ai_start = None
+
+        if enable:
+            self._handle_new_game()
+        else:
+            self._update_player_controls()
+            if self.usi_ready:
+                self._request_legal_moves()
+            self._refresh_views()
+
     def _handle_new_game(self) -> None:
         self.board_state.reset()
         self.move_history.clear()
@@ -589,17 +742,15 @@ class MainWindow(QMainWindow):
         self.waiting_legal_moves = False
         self.in_check = False
         self.game_over = False
+        self._pending_ai_start = None
         self._reset_position_history()
-        self.board_widget.setEnabled(True)
-        self.sente_hand.setEnabled(True)
-        self.resign_button.setEnabled(True)
-        self._refresh_views()
+        self._update_player_controls()
         self._update_check_indicator()
         if self.usi_ready:
             self.engine_client.send_line("usinewgame")
             self._sync_engine_position()
-            self.statusBar().showMessage("先手番です")
             self._request_legal_moves()
+        self._refresh_views()
         self.info_view.clear()
         self.audio_manager.play_voice("game_start")
 
@@ -610,7 +761,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("対局終了")
 
     def _handle_drop_selection(self, kind: str) -> None:
-        if self.awaiting_engine_move or self.game_over:
+        if self.awaiting_engine_move or self.game_over or self._is_engine_controlled(self.HUMAN_COLOR):
             return
         self.selected_drop_kind = kind
         self.selected_square = None
@@ -620,7 +771,11 @@ class MainWindow(QMainWindow):
         self.cancel_drop_button.setEnabled(True)
 
     def _handle_board_click(self, coord: str) -> None:
-        if self.awaiting_engine_move or self.game_over:
+        if (
+            self.awaiting_engine_move
+            or self.game_over
+            or self._is_engine_controlled(self.HUMAN_COLOR)
+        ):
             return
 
         piece = self.board_state.piece_at(coord)
@@ -658,7 +813,10 @@ class MainWindow(QMainWindow):
         self._apply_human_move(move)
 
     def _handle_cancel_drop(self) -> None:
-        if not self.selected_drop_kind:
+        if (
+            not self.selected_drop_kind
+            or self._is_engine_controlled(self.HUMAN_COLOR)
+        ):
             return
         self._clear_drop_selection()
         self.statusBar().showMessage("持ち駒の選択を解除しました")
@@ -730,16 +888,17 @@ class MainWindow(QMainWindow):
         self.move_history.append(move)
         self.pending_user_move = move
         self.awaiting_engine_move = True
+        self._update_player_controls()
         self.audio_manager.play_move_sound()
-        self._append_log(f"先手: {move}")
+        self._append_log(f"{self._format_actor_label(self.HUMAN_COLOR)}: {move}")
         self._refresh_views()
         self._record_position()
         if self.game_over:
             return True
 
         self._sync_engine_position()
-        self.engine_client.send_line("go depth 3")
-        self.statusBar().showMessage("後手の思考中…")
+        self.engine_client.send_line(f"go depth {self.engine_depth}")
+        self.statusBar().showMessage(f"{self._format_actor_label(self.ENGINE_COLOR)}の思考中…")
         return True
 
     def _refresh_views(self) -> None:
@@ -747,9 +906,10 @@ class MainWindow(QMainWindow):
         self.gote_hand.update_counts(self.board_state.hand_counts(self.ENGINE_COLOR))
         self.sente_hand.update_counts(self.board_state.hand_counts(self.HUMAN_COLOR))
         self._update_highlight_targets()
-        turn_text = "先手番" if self.board_state.side_to_move == self.HUMAN_COLOR else "後手番"
         if not self.awaiting_engine_move:
-            self.statusBar().showMessage(f"{turn_text}です")
+            side = self.board_state.side_to_move
+            self.statusBar().showMessage(f"{self._format_actor_label(side)}の番です")
+        self._update_player_controls()
 
     def _handle_clear_log(self) -> None:
         self.log_view.clear()
@@ -765,28 +925,27 @@ class MainWindow(QMainWindow):
             self.usi_ready = True
             self.engine_client.send_line("usinewgame")
             self._sync_engine_position()
-            self.statusBar().showMessage("先手番です")
             self.info_view.clear()
             self._request_legal_moves()
+            self._refresh_views()
             self.audio_manager.play_voice("game_start")
             return
         if line.startswith("info string position error"):
             self._append_info(line)
             self._append_log(line)
             self.waiting_legal_moves = False
+            self._pending_ai_start = None
             if self.pending_user_move and self.move_history and self.move_history[-1] == self.pending_user_move:
                 self.move_history.pop()
                 self.board_state.load_history(self.move_history)
                 self._rebuild_position_history()
                 self.game_over = False
-                self.board_widget.setEnabled(True)
-                self.sente_hand.setEnabled(True)
-                self.resign_button.setEnabled(True)
                 self._clear_drop_selection()
                 self.awaiting_engine_move = False
                 self.pending_user_move = None
                 self._sync_engine_position()
                 self._refresh_views()
+                self._update_player_controls()
                 self.statusBar().showMessage("手を指し直してください")
                 self._request_legal_moves()
             return
@@ -814,11 +973,16 @@ class MainWindow(QMainWindow):
             self._append_log(f"bestmoveを無視しました: {move}")
             return
 
+        moving_color = self.board_state.side_to_move
+        self._pending_ai_start = None
         self.awaiting_engine_move = False
         self.pending_user_move = None
         if move == "resign":
-            self._append_log("後手が投了しました")
-            self.statusBar().showMessage("後手が投了しました")
+            label = self._format_actor_label(moving_color)
+            self._append_log(f"{label}が投了しました")
+            self.statusBar().showMessage(f"{label}が投了しました")
+            self.game_over = True
+            self._update_player_controls()
             return
         try:
             self.board_state.apply_move(move)
@@ -826,7 +990,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"エンジン手適用エラー: {exc}")
             return
         self.move_history.append(move)
-        self._append_log(f"後手: {move}")
+        self._append_log(f"{self._format_actor_label(moving_color)}: {move}")
         self.audio_manager.play_move_sound()
         self._refresh_views()
         self._record_position()
@@ -834,6 +998,7 @@ class MainWindow(QMainWindow):
             return
         self._request_legal_moves()
         self._check_game_over_conditions()
+        self._maybe_start_engine_turn()
 
     def _handle_engine_error(self, text: str) -> None:
         self._append_log(f"[ERR] {text}")
@@ -841,11 +1006,11 @@ class MainWindow(QMainWindow):
     def _handle_engine_exit(self, code: int) -> None:
         self._append_log(f"エンジンが終了しました (code={code})")
         self._append_info(f"info string engine exited code={code}")
-        self.board_widget.setEnabled(False)
-        self.sente_hand.setEnabled(False)
         self.awaiting_engine_move = False
         self.pending_user_move = None
         self.waiting_legal_moves = False
+        self._pending_ai_start = None
+        self._update_player_controls()
         self.statusBar().showMessage("エンジン停止")
 
     def _append_log(self, message: str) -> None:
@@ -870,6 +1035,7 @@ class MainWindow(QMainWindow):
         self.waiting_legal_moves = False
         self._update_highlight_targets()
         self._check_game_over_conditions()
+        self._maybe_start_engine_turn()
 
     def _handle_checkstate(self, line: str) -> None:
         parts = line.split(maxsplit=1)
@@ -886,6 +1052,8 @@ class MainWindow(QMainWindow):
             or self.game_over
         ):
             return
+        self.legal_moves = []
+        self._update_highlight_targets()
         self.engine_client.send_line("legalmoves")
         self.waiting_legal_moves = True
 
@@ -922,32 +1090,92 @@ class MainWindow(QMainWindow):
             self.position_counts[key] += 1
 
     def _check_game_over_conditions(self) -> None:
-        if self.game_over:
-            return
-        if self.board_state.side_to_move != self.HUMAN_COLOR:
-            return
-        if self.waiting_legal_moves:
-            return
-        if not self.in_check:
+        if self.game_over or self.waiting_legal_moves:
             return
         if self.legal_moves:
             return
-        self._handle_checkmate()
 
-    def _handle_checkmate(self) -> None:
+        side = self.board_state.side_to_move
+        if self.in_check:
+            self._handle_checkmate(side)
+        else:
+            self._handle_no_legal_moves(side)
+
+    def _handle_checkmate(self, loser: str) -> None:
+        winner = opponent(loser)
+        if loser == self.HUMAN_COLOR and not self.ai_vs_ai_mode:
+            self._finalize_game(
+                "詰まされました",
+                "詰み: あなたの負けです。",
+                "詰み",
+                "詰みです。あなたの負けです。",
+            )
+            return
+        if loser == self.ENGINE_COLOR and not self.ai_vs_ai_mode:
+            self._finalize_game(
+                "詰ませました",
+                "詰み: あなたの勝ちです。",
+                "詰み",
+                "おめでとうございます。あなたの勝ちです。",
+            )
+            return
+
+        loser_label = self._format_actor_label(loser)
+        winner_label = self._format_actor_label(winner)
         self._finalize_game(
-            "詰まされました",
-            "詰み: あなたの負けです。",
+            f"{winner_label}の勝ちです",
+            f"詰み: {winner_label}の勝ちです。",
             "詰み",
-            "あなたの負けです。",
+            f"{winner_label}が{loser_label}を詰ませました。",
+        )
+
+    def _handle_no_legal_moves(self, loser: str) -> None:
+        winner = opponent(loser)
+        if loser == self.HUMAN_COLOR and not self.ai_vs_ai_mode:
+            self._finalize_game(
+                "合法手がありません",
+                "合法手がないため、あなたの負けです。",
+                "手詰まり",
+                "合法手がないため、あなたの負けです。",
+            )
+            return
+        if loser == self.ENGINE_COLOR and not self.ai_vs_ai_mode:
+            self._finalize_game(
+                "合法手がありません",
+                "合法手がないため、あなたの勝ちです。",
+                "手詰まり",
+                "合法手がないため、あなたの勝ちです。",
+            )
+            return
+
+        loser_label = self._format_actor_label(loser)
+        winner_label = self._format_actor_label(winner)
+        self._finalize_game(
+            f"{winner_label}の勝ちです",
+            f"合法手がないため、{winner_label}の勝ちです。",
+            "手詰まり",
+            f"{winner_label}が{loser_label}を手詰まりにしました。",
         )
 
     def _handle_repetition(self) -> None:
+        loser = self.HUMAN_COLOR
+        winner = opponent(loser)
+        if not self.ai_vs_ai_mode:
+            self._finalize_game(
+                "千日手で負けました",
+                "千日手: 先手の負けです。",
+                "千日手",
+                "千日手が成立したため、あなたの負けです。",
+            )
+            return
+
+        loser_label = self._format_actor_label(loser)
+        winner_label = self._format_actor_label(winner)
         self._finalize_game(
-            "千日手です",
-            "千日手: 引き分けです。",
+            f"千日手: {winner_label}の勝ち",
+            f"千日手: {winner_label}の勝ちです。",
             "千日手",
-            "千日手です。引き分けとなります。",
+            f"千日手が成立したため、{loser_label}の負けです。",
         )
 
     def _finalize_game(
@@ -965,13 +1193,12 @@ class MainWindow(QMainWindow):
         self.selected_square = None
         self._clear_drop_selection()
         self.waiting_legal_moves = False
-        self.board_widget.setEnabled(False)
-        self.sente_hand.setEnabled(False)
-        self.resign_button.setEnabled(False)
+        self._pending_ai_start = None
         self.board_widget.set_selection(None, drop_mode=False)
         self.board_widget.set_highlight_targets([])
         self.statusBar().showMessage(status_message)
         self._append_log(log_message)
+        self._update_player_controls()
         QMessageBox.information(self, dialog_title, dialog_message)
 
     def _update_check_indicator(self) -> None:

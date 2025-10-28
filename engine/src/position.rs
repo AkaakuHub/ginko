@@ -42,6 +42,7 @@ pub struct Position {
     side_to_move: Color,
     ply: u32,
     hash: u64,
+    history: Vec<u64>,
 }
 
 impl Position {
@@ -54,6 +55,7 @@ impl Position {
             side_to_move: Color::Black,
             ply: 1,
             hash: 0,
+            history: Vec::new(),
         }
     }
 
@@ -145,6 +147,8 @@ impl Position {
         self.side_to_move = Color::Black;
         self.ply = 1;
         self.hash = 0;
+        self.history.clear();
+        self.history.push(self.hash);
     }
 
     fn switch_side(&mut self) {
@@ -159,6 +163,17 @@ impl Position {
 
     pub fn zobrist_key(&self) -> u64 {
         self.hash
+    }
+
+    pub fn current_repetition_count(&self) -> usize {
+        match self.history.last() {
+            Some(&last) => self.repetition_count(last),
+            None => 0,
+        }
+    }
+
+    pub fn repetition_count(&self, key: u64) -> usize {
+        self.history.iter().filter(|&&k| k == key).count()
     }
 
     fn recompute_hash(&mut self) {
@@ -178,6 +193,8 @@ impl Position {
         if self.side_to_move == Color::White {
             self.hash ^= zobrist::side_to_move();
         }
+        self.history.clear();
+        self.history.push(self.hash);
     }
 
     fn promotion_zone(color: Color, square: Square) -> bool {
@@ -300,6 +317,7 @@ impl Position {
 
         self.switch_side();
         self.ply += 1;
+        self.history.push(self.hash);
         Ok(())
     }
 
